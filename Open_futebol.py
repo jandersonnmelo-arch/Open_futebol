@@ -4,13 +4,18 @@ from datetime import datetime, timedelta
 import threading
 
 # ==============================
-# ⚙️ CONFIGURAÇÃO
+# 🚀 INICIO GARANTIDO
 # ==============================
 st.set_page_config(page_title="⚽ Análise OpenFootball", page_icon="⚽", layout="wide")
 
-BOT_TOKEN = st.secrets["BOT_TOKEN"]
-CHAT_ID = st.secrets["CHAT_ID"]
-DIAS_BUSCA = int(st.secrets.get("DIAS_BUSCA", 7))
+try:
+    BOT_TOKEN = st.secrets["BOT_TOKEN"]
+    CHAT_ID = st.secrets["CHAT_ID"]
+    DIAS_BUSCA = int(st.secrets.get("DIAS_BUSCA", 7))
+except:
+    st.error("⚠️ Verifique os valores nos Secrets do Streamlit!")
+    st.stop()
+
 HORARIO_ALERTA = "08:30"
 
 CAMPEONATOS = {
@@ -47,13 +52,14 @@ def enviar_telegram(msg):
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                      data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "Markdown"}, timeout=10)
         return True
-    except:
+    except Exception as e:
+        print(f"Erro Telegram: {e}")
         return False
 
 # ==============================
-# 🔍 BUSCA COM DATA SEGURA
+# 🔍 BUSCA 100% PROTEGIDA
 # ==============================
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner="Buscando jogos...")
 def buscar_jogos(chave, dias):
     hoje = datetime.now().date()
     lista = []
@@ -64,26 +70,31 @@ def buscar_jogos(chave, dias):
             if r.status_code != 200:
                 continue
             dados = r.json()
-            for jogo in dados.get("matches", []):
-                data_texto = jogo.get("date", "").strip()
-                if not data_texto:
+            if not isinstance(dados, dict) or "matches" not in dados:
+                continue
+            for jogo in dados["matches"]:
+                if not isinstance(jogo, dict):
                     continue
-                # ✅ TRATA ERRO DE DATA SEM TRAVAR
+                data_texto = str(jogo.get("date", "")).strip()
+                if not data_texto or len(data_texto) < 8:
+                    continue
+                # ✅ TRATAMENTO FORÇADO DE ERRO
                 try:
                     data_jogo = datetime.strptime(data_texto, "%Y-%m-%d").date()
-                except ValueError:
+                except:
                     continue
                 if hoje <= data_jogo <= hoje + timedelta(days=dias):
                     lista.append({
-                        "casa": jogo["team1"],
-                        "fora": jogo["team2"],
+                        "casa": str(jogo.get("team1", "Não informado")),
+                        "fora": str(jogo.get("team2", "Não informado")),
                         "data": data_jogo,
-                        "hora": jogo.get("time", "00:00"),
+                        "hora": str(jogo.get("time", "00:00")),
                         "liga": chave
                     })
             if lista:
                 break
-        except:
+        except Exception as erro_busca:
+            print(f"Erro na liga {chave}: {erro_busca}")
             continue
     return lista
 
@@ -103,36 +114,42 @@ def dupla(v,e,d):
     return {"1X": round(v+e,1), "X2": round(e+d,1), "12": round(v+d,1)}
 
 # ==============================
-# 🤖 ROTINA AUTOMÁTICA
+# 🤖 ROTINA
 # ==============================
 def alerta():
     while True:
-        if datetime.now().strftime("%H:%M") == HORARIO_ALERTA:
-            mensagem = f"🔔 *RELATÓRIO AUTOMÁTICO*\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
-            total = 0
-            for nome, chave in CAMPEONATOS.items():
-                jogos = buscar_jogos(chave, DIAS_BUSCA)
-                if not jogos:
-                    continue
-                mensagem += f"🏆 {nome}\n"
-                for j in jogos:
-                    total += 1
-                    dt = datetime.combine(j["data"], datetime.strptime(j["hora"],"%H:%M").time()) - timedelta(hours=4)
-                    c = calcular(j["liga"])
-                    f = calcular(j["liga"])
-                    dup = dupla(c["v"],c["e"],c["d"])
-                    mensagem += f"⚽ {j['casa']} x {j['fora']} | {dt.strftime('%d/%m %H:%M')}\n✅ {c['v']}% | ⚖️ {round((c['e']+f['e'])/2,1)}% | ✅ {f['d']}%\n🔀 1X:{dup['1X']}% X2:{dup['X2']}% 12:{dup['12']}%\n---\n"
-            if total > 0:
-                enviar_telegram(mensagem)
-            threading.Event().wait(120)
-        threading.Event().wait(30)
+        try:
+            if datetime.now().strftime("%H:%M") == HORARIO_ALERTA:
+                mensagem = f"🔔 *RELATÓRIO AUTOMÁTICO*\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n\n"
+                total = 0
+                for nome, chave in CAMPEONATOS.items():
+                    jogos = buscar_jogos(chave, DIAS_BUSCA)
+                    if not jogos:
+                        continue
+                    mensagem += f"🏆 {nome}\n"
+                    for j in jogos:
+                        total += 1
+                        try:
+                            dt = datetime.combine(j["data"], datetime.strptime(j["hora"],"%H:%M").time()) - timedelta(hours=4)
+                            c = calcular(j["liga"])
+                            f = calcular(j["liga"])
+                            dup = dupla(c["v"],c["e"],c["d"])
+                            mensagem += f"⚽ {j['casa']} x {j['fora']} | {dt.strftime('%d/%m %H:%M')}\n✅ {c['v']}% | ⚖️ {round((c['e']+f['e'])/2,1)}% | ✅ {f['d']}%\n🔀 1X:{dup['1X']}% X2:{dup['X2']}% 12:{dup['12']}%\n---\n"
+                        except:
+                            continue
+                if total > 0:
+                    enviar_telegram(mensagem)
+            threading.Event().wait(30)
+        except:
+            threading.Event().wait(60)
 
 threading.Thread(target=alerta, daemon=True).start()
 
 # ==============================
-# 🖥️ INTERFACE
+# 🖥️ TELA PRINCIPAL
 # ==============================
 st.title("⚽ Análise de Jogos | OpenFootball")
+
 liga_esc = st.selectbox("Escolha a competição", list(CAMPEONATOS.keys()))
 dias = st.number_input("Buscar quantos dias?", min_value=1, max_value=14, value=DIAS_BUSCA)
 
@@ -141,33 +158,36 @@ if st.button("🔍 Atualizar e Enviar Agora"):
     jogos = buscar_jogos(CAMPEONATOS[liga_esc], dias)
     
     if not jogos:
-        st.warning("ℹ️ Nenhum jogo encontrado nesse período.")
+        st.warning("ℹ️ Nenhum jogo encontrado nesse período ou temporada.")
     else:
         st.success(f"✅ {len(jogos)} jogos encontrados!")
         msg_rel = f"🔔 *RELATÓRIO SOLICITADO*\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}\n📅 {liga_esc} - {dias} dias\n\n"
         
         for j in jogos:
-            dt = datetime.combine(j["data"], datetime.strptime(j["hora"],"%H:%M").time()) - timedelta(hours=4)
-            c = calcular(j["liga"])
-            f = calcular(j["liga"])
-            dup = dupla(c["v"],c["e"],c["d"])
-            
-            msg_rel += f"⚽ {j['casa']} x {j['fora']} | {dt.strftime('%d/%m %H:%M')}\n✅ {c['v']}% | ⚖️ {round((c['e']+f['e'])/2,1)}% | ✅ {f['d']}%\n🔀 1X:{dup['1X']}% X2:{dup['X2']}% 12:{dup['12']}%\n---\n"
-            
-            st.subheader(f"⚽ {j['casa']} 🆚 {j['fora']} | {dt.strftime('%d/%m %H:%M')}")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write(f"✅ {j['casa']}: {c['v']}%")
-                st.write(f"⚖️ Empate: {round((c['e']+f['e'])/2,1)}%")
-                st.write(f"✅ {j['fora']}: {f['d']}%")
-                st.divider()
-                st.write(f"🔀 Dupla Chance:")
-                st.write(f"1X: {dup['1X']}% | X2: {dup['X2']}% | 12: {dup['12']}%")
-            with col2:
-                st.write(f"⚽ Média Gols: {round((c['mg']+f['mg'])/2,2)}")
-                st.write(f"Mais de 2.5: {round((c['ma25']+f['ma25'])/2,0)}%")
-                st.write(f"📐 Escanteios: {round((c['esc']+f['esc'])/2,1)} | Faltas: {round((c['fal']+f['fal'])/2,1)}")
-            st.markdown("---")
+            try:
+                dt = datetime.combine(j["data"], datetime.strptime(j["hora"],"%H:%M").time()) - timedelta(hours=4)
+                c = calcular(j["liga"])
+                f = calcular(j["liga"])
+                dup = dupla(c["v"],c["e"],c["d"])
+                
+                msg_rel += f"⚽ {j['casa']} x {j['fora']} | {dt.strftime('%d/%m %H:%M')}\n✅ {c['v']}% | ⚖️ {round((c['e']+f['e'])/2,1)}% | ✅ {f['d']}%\n🔀 1X:{dup['1X']}% X2:{dup['X2']}% 12:{dup['12']}%\n---\n"
+                
+                st.subheader(f"⚽ {j['casa']} 🆚 {j['fora']} | {dt.strftime('%d/%m %H:%M')}")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"✅ {j['casa']}: {c['v']}%")
+                    st.write(f"⚖️ Empate: {round((c['e']+f['e'])/2,1)}%")
+                    st.write(f"✅ {j['fora']}: {f['d']}%")
+                    st.divider()
+                    st.write(f"🔀 Dupla Chance:")
+                    st.write(f"1X: {dup['1X']}% | X2: {dup['X2']}% | 12: {dup['12']}%")
+                with col2:
+                    st.write(f"⚽ Média Gols: {round((c['mg']+f['mg'])/2,2)}")
+                    st.write(f"Mais de 2.5: {round((c['ma25']+f['ma25'])/2,0)}%")
+                    st.write(f"📐 Escanteios: {round((c['esc']+f['esc'])/2,1)} | Faltas: {round((c['fal']+f['fal'])/2,1)}")
+                st.markdown("---")
+            except:
+                continue
         
         enviar_telegram(msg_rel)
         st.success("✅ Relatório enviado ao Telegram!")
